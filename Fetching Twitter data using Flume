@@ -1,0 +1,157 @@
+----**** Create a twitter app ****-----
+
+go to -> apps.twitter.com
+
+Create an app (Fill in the details)
+
+In CallbackURL put -> https://api.twitter.com/oauth/request_token
+
+
+
+* Install service flume on Cloudera and configure agent on CM host
+
+----**** Configure Flume Agent ****-----
+
+* In CM Goto -> Flume -> Configuration 
+  Set the Agent Name property to TwitterAgent
+  In 'Configuration File' Enter the following configuration
+
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#  http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+
+# The configuration file needs to define the sources, 
+# the channels and the sinks.
+# Sources, channels and sinks are defined per agent, 
+# in this case called 'TwitterAgent'
+
+TwitterAgent.sources = Twitter
+TwitterAgent.channels = MemChannel
+TwitterAgent.sinks = HDFS
+
+TwitterAgent.sources.Twitter.type = org.apache.flume.source.twitter.TwitterSource
+TwitterAgent.sources.Twitter.channels = MemChannel
+TwitterAgent.sources.Twitter.consumerKey = l4NpBlDN2bBXJSIPiw3fiFjVu
+TwitterAgent.sources.Twitter.consumerSecret =gBrcXie7VyYIOpyhUaWqdz5jRB4nE27ps4uTHde7oqEUZrBZkr
+TwitterAgent.sources.Twitter.accessToken =267699340-VheDjbW2QR7mW1kl9S1KdiWQvh9aBbFcxwNvCJIo
+TwitterAgent.sources.Twitter.accessTokenSecret =F0N4sC1KPgg2n0Id4toFz3WEIiFPFwv8plIPW1QNvzkM2
+TwitterAgent.sources.Twitter.keywords = hadoop, big data, analytics, bigdata, cloudera, data science, data scientiest, business intelligence, mapreduce, data warehouse, data warehousing, mahout, hbase, nosql, newsql, businessintelligence, cloudcomputing
+
+TwitterAgent.sinks.HDFS.channel = MemChannel
+TwitterAgent.sinks.HDFS.type = hdfs
+TwitterAgent.sinks.HDFS.hdfs.path = hdfs://ip-172-31-90-188.ec2.internal:8020/user/flume/tweets/%Y/%m/%d/%H/
+TwitterAgent.sinks.HDFS.hdfs.fileType = DataStream
+TwitterAgent.sinks.HDFS.hdfs.writeFormat = Text
+TwitterAgent.sinks.HDFS.hdfs.batchSize = 1000
+TwitterAgent.sinks.HDFS.hdfs.rollSize = 0
+TwitterAgent.sinks.HDFS.hdfs.rollCount = 10000
+TwitterAgent.sinks.HDFS.hdfs.useLocalTimeStamp = true
+TwitterAgent.sinks.hdfs.serializer = Text
+
+TwitterAgent.channels.MemChannel.type = memory
+TwitterAgent.channels.MemChannel.capacity = 10000
+TwitterAgent.channels.MemChannel.transactionCapacity = 100	 
+
+
+----**** Create HDFS directory for flume sink ****-----
+
+hdfs dfs -mkdir -p /user/flume/tweets
+hdfs dfs -chown -R flume:flume /user/flume
+hdfs dfs -chmod -R 770 /user/flume
+
+
+----**** Configure Avro serializer jar ****-----
+
+In CM -> Hive -> Configuration : Search - jar
+Hive Auxiliary JARs Directory      /opt/cloudera/parcels/CDH/lib/hive-hcatalog/share/hcatalog/
+
+
+----**** Start the agent ****-----
+
+sudo /opt/cloudera/parcels/CDH-5.13.1-1.cdh5.13.1.p0.2/etc/init.d/flume-ng-agent status
+
+sudo /opt/cloudera/parcels/CDH-5.13.1-1.cdh5.13.1.p0.2/etc/init.d/flume-ng-agent start
+
+
+--> Check on HDFS file browser whether data is comming
+
+
+-----**** Creating tables in hive for twitter data ****-----
+
+* Send avro tools jar to DC 
+
+$ scp -i key.pem avro-tools-1.7.7.jar ubuntu@nn:~
+
+* Check schema of twitter files
+
+$ hdfs dfs -copyToLocal /user/flume/tweets/2017/12/30/09/FlumeData.1514627200883 ~
+
+$ sudo java -jar /opt/cloudera/parcels/CDH-5.16.1-1.cdh5.16.1.p0.2/jars/avro-tools-1.7.6-cdh5.16.1.jar getschema FlumeData.1514627200883
+
+* Create avro schema file
+
+$  nano TwitterDataAvroSchema.avsc
+{"type":"record",
+ "name":"Doc",
+ "doc":"adoc",
+ "fields":[{"name":"id","type":"string"},
+           {"name":"user_friends_count","type":["int","null"]},
+           {"name":"user_location","type":["string","null"]},
+           {"name":"user_description","type":["string","null"]},
+           {"name":"user_statuses_count","type":["int","null"]},
+           {"name":"user_followers_count","type":["int","null"]},
+           {"name":"user_name","type":["string","null"]},
+           {"name":"user_screen_name","type":["string","null"]},
+           {"name":"created_at","type":["string","null"]},
+           {"name":"text","type":["string","null"]},
+           {"name":"retweet_count","type":["long","null"]},
+           {"name":"retweeted","type":["boolean","null"]},
+           {"name":"in_reply_to_user_id","type":["long","null"]},
+           {"name":"source","type":["string","null"]},
+           {"name":"in_reply_to_status_id","type":["long","null"]},
+           {"name":"media_url_https","type":["string","null"]},
+           {"name":"expanded_url","type":["string","null"]}
+          ]
+}
+
+* Put schema file on HDFS
+
+hdfs dfs -mkdir /data
+hdfs dfs -chmod -R 777 /data
+hdfs dfs -put TwitterDataAvroSchema.avsc /data
+
+* Create hive tables with avro serde
+
+CREATE TABLE tweets
+  ROW FORMAT SERDE
+     'org.apache.hadoop.hive.serde2.avro.AvroSerDe'
+  STORED AS INPUTFORMAT
+     'org.apache.hadoop.hive.ql.io.avro.AvroContainerInputFormat'
+  OUTPUTFORMAT
+     'org.apache.hadoop.hive.ql.io.avro.AvroContainerOutputFormat'
+  TBLPROPERTIES ('avro.schema.url'='hdfs://ip-172-31-90-188.ec2.internal:8020/data/TwitterDataAvroSchema.avsc') ;
+
+LOAD DATA INPATH '/user/flume/tweets/2017/12/30/11/FlumeData.*' OVERWRITE INTO TABLE tweets;
+
+
+* Check schema in hive
+
+hive> describe tweets;
+
+
+(if any error add this jar
+hive> ADD JAR /opt/cloudera/parcels/CDH/lib/hive-hcatalog/share/hcatalog/hive-hcatalog-core.jar; )
